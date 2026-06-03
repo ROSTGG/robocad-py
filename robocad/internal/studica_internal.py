@@ -14,6 +14,8 @@ from .common.connection_real import ConnectionReal
 from .common.updaters import RpiUpdater
 from .common.robot_configuration import DefaultStudicaConfiguration
 
+import pigpio
+
 
 class StudicaInternal:
     HCDIO_CONST_ARRAY = [4, 18, 17, 27, 23, 22, 24, 25, 7, 5]
@@ -75,6 +77,22 @@ class StudicaInternal:
             self.__titan.start_com(self.__connection, self.__robot, self, conf)
             self.__vmx = VMXSPI()
             self.__vmx.start_spi(self.__connection, self.__robot, self, conf)
+    self.__pigpio = None
+        if self.__robot.on_real_robot:
+            self.__pigpio = pigpio.pi()
+            if not self.__pigpio.connected:
+                robot.write_log("Не удалось подключиться к pigpiod")
+                self.__pigpio = None
+            else:
+                # Предварительная настройка частоты ШИМ для сервоприводов (50 Гц)
+                for pin in self.HCDIO_CONST_ARRAY:
+                    if pin in (12, 13, 18, 19):  # аппаратный ШИМ
+                        # Частота будет задана при вызове hardware_PWM
+                        pass
+                    else:
+                        self.__pigpio.set_PWM_frequency(pin, 50)
+                        self.__pigpio.set_PWM_range(pin, 255)
+
 
     def stop(self):
         self.__connection.stop()
@@ -86,6 +104,8 @@ class StudicaInternal:
                 self.__titan.stop()
             if self.__vmx is not None:
                 self.__vmx.stop()
+            if self.__pigpio is not None:
+                self.__pigpio.stop()
 
     def get_camera(self):
         return self.__connection.get_camera()
@@ -93,31 +113,50 @@ class StudicaInternal:
     def set_servo_angle(self, angle: float, pin: int):
         dut: float = 0.000666 * angle + 0.05
         self.hcdio_values[pin] = dut
-        self.echo_to_file(str(self.HCDIO_CONST_ARRAY[pin]) + "=" + str(dut))
+        self._set_pwm(pin, dut)
 
     def set_led_state(self, state: bool, pin: int):
         dut: float = 0.2 if state else 0.0
         self.hcdio_values[pin] = dut
-        self.echo_to_file(str(self.HCDIO_CONST_ARRAY[pin]) + "=" + str(dut))
+        self._set_pwm(pin, dut)
 
     def set_servo_pwm(self, pwm: float, pin: int):
         dut: float = pwm
         self.hcdio_values[pin] = dut
-        self.echo_to_file(str(self.HCDIO_CONST_ARRAY[pin]) + "=" + str(dut))
+        self._set_pwm(pin, dut)
 
     def disable_servo(self, pin: int):
         self.hcdio_values[pin] = 0.0
-        self.echo_to_file(str(self.HCDIO_CONST_ARRAY[pin]) + "=" + "0.0")
+        self._set_pwm(pin, 0.0)
 
-    def echo_to_file(self, st: str):
-        if not self.__robot.on_real_robot:
-            return None
-        original_stdout = sys.stdout
-        with open('/dev/pi-blaster', 'w') as f:
-            sys.stdout = f  # Change the standard output to the file we created.
-            print(st)
-            sys.stdout = original_stdout  # Reset the standard output to its original value
-    
+    def _set_pwm(self, pin: int, duty: float):
+        """Установить ШИМ на указанном пине через pigpio.
+        duty — от 0.0 до 1.0 (0% – 100%)."""
+        if self.__pigpio is None or not self.__pigpio.connected:
+            return
+
+        gpio_pin = self.HCDIO_CONST_ARRAY[pin]  # преобразовать индекс в номер GPIO
+        if duty <= 0.0:
+            # Отключить ШИМ
+            if gpio_pin in (12, 13, 18, 19):
+                self.__pigpio.hardware_PWM(gpio_pin, 0, 0)
+            else:
+                self.__pigpio.set_PWM_dutycycle(gpio_pin, 0)
+            return
+
+        # Для сервоприводов стандартная частота 50 Гц
+        frequency = 50
+
+        if gpio_pin in (12, 13, 18, 19):
+            # Аппаратный ШИМ: dutycycle = duty * 1_000_000
+            dutycycle = int(duty * 1_000_000)
+            self.__pigpio.hardware_PWM(gpio_pin, frequency, dutycycle)
+        else:
+            # Программный ШИМ через pigpio (0..255)
+            duty_255 = int(duty * 255)
+            self.__pigpio.set_PWM_frequency(gpio_pin, frequency)
+            self.__pigpio.set_PWM_dutycycle(gpio_pin, duty_255)
+
 class RobocadConnection:
     def __init__(self):
         self.__update_thread = None
