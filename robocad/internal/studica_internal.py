@@ -77,11 +77,11 @@ class StudicaInternal:
             self.__titan.start_com(self.__connection, self.__robot, self, conf)
             self.__vmx = VMXSPI()
             self.__vmx.start_spi(self.__connection, self.__robot, self, conf)
-    self.__pigpio = None
+        self.__pigpio = None
         if self.__robot.on_real_robot:
             self.__pigpio = pigpio.pi()
             if not self.__pigpio.connected:
-                robot.write_log("Не удалось подключиться к pigpiod")
+                self.__robot.write_log("Не удалось подключиться к pigpiod")
                 self.__pigpio = None
             else:
                 # Предварительная настройка частоты ШИМ для сервоприводов (50 Гц)
